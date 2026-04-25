@@ -216,12 +216,36 @@ class NWeatherAPI:
         except Exception as e:
             _LOGGER.error( f"[{BRAND}] _bs4_select_one Error {tag} : {e}" )
 
+    def _air_url(self, location_info):
+        area = (self.area or "").strip()
+
+        if "미세먼지" in area:
+            air_area = area
+        elif "날씨" in area:
+            air_area = area.replace("날씨", "미세먼지").strip()
+        else:
+            air_area = f"{area} 미세먼지".strip()
+
+        if location_info and air_area == "미세먼지":
+            air_area = f"{location_info} 미세먼지"
+
+        return BSE_URL.format(air_area)
+
+    def _air_state(self, bs4air, title):
+        for state in bs4air.select("div.state_info"):
+            state_title = self._bs4_select_one(state, "div.grade div.text_box > span.title")
+            if state_title == title:
+                value = self._bs4_select_one(state, "div.grade div.text_box > span.num")
+                grade = self._bs4_select_one(state, "div.grade > span.text")
+                return value, grade
+
+        return None, None
+
 
     async def update(self):
         """Update function for updating api information."""
         try:
             url = BSE_URL.format(self.area)
-            url_air = url.replace("날씨", "미세먼지")
 
             hdr = {
                 "User-Agent": (
@@ -245,15 +269,14 @@ class NWeatherAPI:
 
             soup = BeautifulSoup(await response.text(), "html.parser")
 
+            # 지역
+            LocationInfo = self._bs4_select_one(soup, "div.title_area._area_panel > h2.title")
+
             #미세먼지
-            air = await session.get(url_air, headers=hdr, timeout=30)
+            air = await session.get(self._air_url(LocationInfo), headers=hdr, timeout=30)
             air.raise_for_status()
 
             bs4air = BeautifulSoup(await air.text(), "html.parser")
-
-
-            # 지역
-            LocationInfo = self._bs4_select_one(soup, "div.title_area._area_panel > h2.title")
 
             # 현재 온도
             NowTempRaw = self._bs4_select_one(soup, "div.temperature_text")
@@ -506,10 +529,20 @@ class NWeatherAPI:
 
 
             # 미세먼지, 초미세먼지, 오존 지수
-            FineDust           = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(1) div.grade div.text_box > span.num")
-            FineDustGrade      = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(1) div.grade > span.text")
-            UltraFineDust      = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(2) div.grade div.text_box > span.num")
-            UltraFineDustGrade = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(2) div.grade > span.text")
+            FineDust, FineDustGrade = self._air_state(bs4air, "미세")
+            UltraFineDust, UltraFineDustGrade = self._air_state(bs4air, "초미세")
+
+            if FineDust is None:
+                FineDust = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(1) div.grade div.text_box > span.num")
+
+            if FineDustGrade is None:
+                FineDustGrade = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(1) div.grade > span.text")
+
+            if UltraFineDust is None:
+                UltraFineDust = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(2) div.grade div.text_box > span.num")
+
+            if UltraFineDustGrade is None:
+                UltraFineDustGrade = self._bs4_select_one(bs4air, "div.state_info:nth-of-type(2) div.grade > span.text")
 
             # 오염물질(오존/일산화탄소/아황산가스/이산화질소/통합대기)
             pollution = bs4air.find("div", {"class": "other_air_info"})
